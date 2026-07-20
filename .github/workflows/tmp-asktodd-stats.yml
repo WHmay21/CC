@@ -1,0 +1,121 @@
+name: Temporary AskToddV duration audit
+
+on:
+  push:
+    branches: [tmp-asktodd-stats]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp-asktodd-stats
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Collect AskToddV video durations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade yt-dlp
+          python - <<'PY'
+          import json, subprocess, sys, time
+          from pathlib import Path
+
+          url = 'https://www.youtube.com/@AskToddV/videos'
+          attempts = [
+              ['yt-dlp', '--flat-playlist', '--dump-single-json', '--ignore-errors', '--no-warnings', url],
+              ['yt-dlp', '--flat-playlist', '--dump-single-json', '--ignore-errors', '--no-warnings', '--extractor-args', 'youtube:player_client=web,android', url],
+          ]
+          data = None
+          last_error = ''
+          for cmd in attempts:
+              p = subprocess.run(cmd, text=True, capture_output=True)
+              if p.returncode == 0 and p.stdout.strip():
+                  try:
+                      data = json.loads(p.stdout)
+                      break
+                  except Exception as exc:
+                      last_error = f'JSON parse failed: {exc}'
+              else:
+                  last_error = p.stderr[-8000:]
+              time.sleep(3)
+
+          if not data:
+              Path('asktodd_stats_error.txt').write_text(last_error, encoding='utf-8')
+              raise SystemExit('Unable to extract channel list')
+
+          entries = [e for e in (data.get('entries') or []) if e and e.get('id')]
+          rows = []
+          missing = []
+          for e in entries:
+              d = e.get('duration')
+              try:
+                  d = float(d) if d is not None else None
+              except Exception:
+                  d = None
+              rows.append({'id': e.get('id'), 'title': e.get('title'), 'duration_seconds': d})
+              if d is None:
+                  missing.append(e.get('id'))
+
+          details = {}
+          if missing:
+              Path('/tmp/missing.txt').write_text('\n'.join('https://www.youtube.com/watch?v=' + x for x in missing), encoding='utf-8')
+              p = subprocess.run([
+                  'yt-dlp', '--batch-file', '/tmp/missing.txt', '--skip-download', '--dump-json',
+                  '--ignore-errors', '--no-warnings', '--extractor-args', 'youtube:player_client=web,android'
+              ], text=True, capture_output=True)
+              for line in p.stdout.splitlines():
+                  try:
+                      x = json.loads(line)
+                  except Exception:
+                      continue
+                  if x.get('id') and x.get('duration') is not None:
+                      details[x['id']] = float(x['duration'])
+              for row in rows:
+                  if row['duration_seconds'] is None and row['id'] in details:
+                      row['duration_seconds'] = details[row['id']]
+
+          durations = [r['duration_seconds'] for r in rows if r['duration_seconds'] is not None]
+          unresolved = [r['id'] for r in rows if r['duration_seconds'] is None]
+          total_seconds = sum(durations)
+          result = {
+              'channel_url': url,
+              'scope': 'YouTube channel Videos tab only',
+              'extractor_title': data.get('title'),
+              'extractor_id': data.get('id'),
+              'playlist_count_reported': data.get('playlist_count'),
+              'video_count': len(entries),
+              'durations_resolved': len(durations),
+              'durations_unresolved': len(unresolved),
+              'unresolved_video_ids': unresolved,
+              'total_seconds': total_seconds,
+              'total_minutes': total_seconds / 60,
+              'total_hours': total_seconds / 3600,
+              'average_minutes': (total_seconds / 60 / len(durations)) if durations else None,
+              'yt_dlp_version': subprocess.check_output(['yt-dlp', '--version'], text=True).strip(),
+          }
+          Path('asktodd_stats.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+          Path('asktodd_videos.json').write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding='utf-8')
+          print(json.dumps(result, ensure_ascii=False, indent=2))
+          if unresolved:
+              print(f'WARNING: {len(unresolved)} unresolved durations', file=sys.stderr)
+          PY
+      - name: Commit results
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add asktodd_stats.json asktodd_videos.json asktodd_stats_error.txt 2>/dev/null || true
+          if ! git diff --cached --quiet; then
+            git commit -m 'Record temporary AskToddV duration audit result'
+            git push origin HEAD:tmp-asktodd-stats
+          fi
