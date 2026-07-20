@@ -1,0 +1,16 @@
+{
+  "channel_url": "https://www.youtube.com/@AskToddV/videos",
+  "scope": "YouTube channel Videos tab only",
+  "extractor_title": "AskToddV - Videos",
+  "extractor_id": "UCvmKbukYpA8SagnjSHt_NfQ",
+  "playlist_count_reported": 298,
+  "video_count": 298,
+  "durations_resolved": 298,
+  "durations_unresolved": 0,
+  "unresolved_video_ids": [],
+  "total_seconds": 139698.0,
+  "total_minutes": 2328.3,
+  "total_hours": 38.805,
+  "average_minutes": 7.813087248322148,
+  "yt_dlp_version": "2026.07.04"
+}
