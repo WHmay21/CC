@@ -3,6 +3,8 @@ name: Temporary AskToddV duration audit
 on:
   push:
     branches: [tmp-asktodd-stats]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
